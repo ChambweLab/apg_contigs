@@ -3,7 +3,8 @@
 This repository contains code for the study of functional potential of African Pangenome Contig (APG) Sequences that are still absent from reference genomes. 
 Study preprint can be found here: <https://doi.org/10.1101/2025.08.15.670543>
 
-<img width="3000" height="2100" alt="APG-Contigs-Schematic-Vertical_v4" src="https://github.com/user-attachments/assets/a956379f-d8be-4b4f-8e25-06da2d261039" />
+<img width="3000" height="2100" alt="schematic" src="https://github.com/user-attachments/assets/437c8dc0-1aef-408b-9d33-2cb5aa62cc52" />
+
 
 ## Repository structure
 
