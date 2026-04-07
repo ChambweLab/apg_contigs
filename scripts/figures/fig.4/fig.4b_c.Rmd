@@ -1,0 +1,608 @@
+---
+title: "APG Contig Alignment to HPRC Assemblies"
+author: "Abdulfatai Tijjani"
+date: "2025-11-20"
+output: html_document
+---
+
+This R Markdown document reproduces the APG manuscript analyses and plots (Figure 4b_c and Supplementary Figures 5a_b) related to contig alignment across HPRC superpopulations and individual HPRC linear assemblies.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE
+)
+
+suppressPackageStartupMessages({
+  library(readxl)
+  library(readr)
+  library(dplyr)
+  library(tidyr)
+  library(ggplot2)
+  library(scales)
+  library(UpSetR)
+  library(forestplot)
+  library(grid)
+  library(patchwork)
+  #library(ComplexHeatmap)
+  library(circlize)
+})
+```
+
+# 1. Continental-level APG contig alignment across HPRC superpopulations
+
+## 1.1 Load superpopulation-level alignment data
+
+```{r load-superpopulation-data}
+# Input: Supplementary Table ST12
+# Expected columns include AFR, AMR, EAS, EUR, and SAS.
+input_excel <- "../../../apg_contigs_paper/Supplemental_tables_S12-S16.xlsx"
+input_sheet <- "ST12"
+
+superpop_hprc <- read_excel(
+  path = input_excel,
+  sheet = input_sheet,
+  skip = 1
+)
+
+# Validate that all required superpopulation columns are present.
+required_cols <- c("AFR", "AMR", "EAS", "EUR", "SAS")
+missing_cols <- setdiff(required_cols, colnames(superpop_hprc))
+
+if (length(missing_cols) > 0) {
+  stop(
+    "Missing required columns in ST12: ",
+    paste(missing_cols, collapse = ", ")
+  )
+}
+
+# Keep a simple 0/1 binary matrix for downstream analyses and plotting.
+upset_df <- superpop_hprc[, required_cols]
+upset_df[] <- lapply(upset_df, function(x) as.numeric(trimws(as.character(x))))
+
+head(superpop_hprc)
+```
+
+## 1.2 Summarize aligned and unaligned contigs per superpopulation
+
+```{r summarize-superpopulation-counts}
+# Number of HPRC samples per superpopulation used in this analysis.
+pop_size <- c(
+  AFR = 24,
+  AMR = 16,
+  EAS = 5,
+  EUR = 1,
+  SAS = 1
+)
+
+# Summarize contig alignment presence/absence within each superpopulation.
+alignment_counts <- superpop_hprc %>%
+  summarise(
+    AFR_aligned = sum(AFR == 1),
+    AFR_unaligned = sum(AFR == 0),
+    AMR_aligned = sum(AMR == 1),
+    AMR_unaligned = sum(AMR == 0),
+    EAS_aligned = sum(EAS == 1),
+    EAS_unaligned = sum(EAS == 0),
+    EUR_aligned = sum(EUR == 1),
+    EUR_unaligned = sum(EUR == 0),
+    SAS_aligned = sum(SAS == 1),
+    SAS_unaligned = sum(SAS == 0)
+  )
+
+alignment_counts
+```
+
+## 1.3 Normalize alignment counts by number of samples per superpopulation
+
+```{r normalize-superpopulation-counts}
+# Descriptive normalization: number of aligned contigs divided by the number of
+# HPRC samples in each superpopulation.
+normalized_alignment_rate <- c(
+  AFR = alignment_counts$AFR_aligned / pop_size["AFR"],
+  AMR = alignment_counts$AMR_aligned / pop_size["AMR"],
+  EAS = alignment_counts$EAS_aligned / pop_size["EAS"],
+  EUR = alignment_counts$EUR_aligned / pop_size["EUR"],
+  SAS = alignment_counts$SAS_aligned / pop_size["SAS"]
+)
+
+normalized_alignment_rate
+```
+
+## 1.4 Global chi-square test across superpopulations
+
+```{r chi-square-test}
+# Build a 2 x 5 contingency matrix: aligned vs unaligned across superpopulations.
+contingency_matrix <- matrix(
+  c(
+    alignment_counts$AFR_aligned, alignment_counts$AFR_unaligned,
+    alignment_counts$AMR_aligned, alignment_counts$AMR_unaligned,
+    alignment_counts$EAS_aligned, alignment_counts$EAS_unaligned,
+    alignment_counts$EUR_aligned, alignment_counts$EUR_unaligned,
+    alignment_counts$SAS_aligned, alignment_counts$SAS_unaligned
+  ),
+  nrow = 2,
+  byrow = TRUE
+)
+
+colnames(contingency_matrix) <- c("AFR", "AMR", "EAS", "EUR", "SAS")
+rownames(contingency_matrix) <- c("Aligned", "Not_Aligned")
+
+contingency_matrix
+
+# Global chi-square test for differences in aligned vs unaligned counts.
+chi_result <- chisq.test(contingency_matrix)
+chi_result
+```
+
+## 1.5 Pairwise odds ratios comparing AFR with other superpopulations
+
+```{r odds-ratios}
+# Compute simple odds ratios using aligned vs unaligned counts.
+# This preserves the original manuscript logic used for the forest plot.
+compute_odds_ratio <- function(aligned1, unaligned1, aligned2, unaligned2) {
+  odds1 <- aligned1 / unaligned1
+  odds2 <- aligned2 / unaligned2
+  OR <- odds1 / odds2
+  return(OR)
+}
+
+odds_AFR_vs_AMR <- compute_odds_ratio(
+  alignment_counts$AFR_aligned, alignment_counts$AFR_unaligned,
+  alignment_counts$AMR_aligned, alignment_counts$AMR_unaligned
+)
+
+odds_AFR_vs_EAS <- compute_odds_ratio(
+  alignment_counts$AFR_aligned, alignment_counts$AFR_unaligned,
+  alignment_counts$EAS_aligned, alignment_counts$EAS_unaligned
+)
+
+odds_AFR_vs_EUR <- compute_odds_ratio(
+  alignment_counts$AFR_aligned, alignment_counts$AFR_unaligned,
+  alignment_counts$EUR_aligned, alignment_counts$EUR_unaligned
+)
+
+odds_AFR_vs_SAS <- compute_odds_ratio(
+  alignment_counts$AFR_aligned, alignment_counts$AFR_unaligned,
+  alignment_counts$SAS_aligned, alignment_counts$SAS_unaligned
+)
+
+odds_ratios <- data.frame(
+  Comparison = c("AFR_vs_AMR", "AFR_vs_EAS", "AFR_vs_EUR", "AFR_vs_SAS"),
+  Odds_Ratio = c(odds_AFR_vs_AMR, odds_AFR_vs_EAS, odds_AFR_vs_EUR, odds_AFR_vs_SAS)
+)
+
+odds_ratios
+```
+
+## 1.6 Forest plot of odds ratios
+
+```{r forest-plot}
+# APG Manuscript Figure 4B
+# Odds ratios comparing the likelihood of APG contig alignment in AFR genomes
+# versus other superpopulations.
+
+tabletext <- cbind(
+  c("Comparison", "AFR vs AMR", "AFR vs EAS", "AFR vs EUR", "AFR vs SAS"),
+  c("Odds Ratio", round(odds_ratios$Odds_Ratio, 2))
+)
+
+forestplot(
+  labeltext = tabletext,
+  mean = c(NA, odds_ratios$Odds_Ratio),
+  lower = c(NA, odds_ratios$Odds_Ratio * 0.8),
+  upper = c(NA, odds_ratios$Odds_Ratio * 1.2),
+  zero = 1,
+  boxsize = 0.2,
+  colgap = unit(5, "mm"),
+  xlab = "Odds Ratio (AFR vs Other Populations)",
+  col = fpColors(box = "darkblue", line = "gray", summary = "royalblue")
+)
+```
+
+## 1.7 Pattern heatmap of binary superpopulation sharing
+
+```{r define-superpopulation-pattern-heatmap}
+# APG Manuscript Supplementary Figure 5A
+# Continental-level binary alignment patterns across HPRC linear assemblies,
+# where a contig is aligned to at least one member of each of the five human
+# superpopulations.
+plot_binary_patterns_complexheatmap_transposed <- function(df, output_file = "pattern_heatmap_transposed.jpeg") {
+
+  # Ensure numeric 0/1 values.
+  df[] <- lapply(df, function(x) suppressWarnings(as.numeric(as.character(x))))
+
+  # Preserve the original superpopulation column order.
+  column_order <- colnames(df)
+
+  # Collapse contigs into unique binary alignment patterns and count frequency.
+  row_patterns <- df %>%
+    group_by(across(all_of(column_order))) %>%
+    summarise(Frequency = n(), .groups = "drop") %>%
+    mutate(
+      Aligned_Count = rowSums(across(all_of(column_order))),
+      Alignment_Rank = 6 - Aligned_Count,
+      Pattern_Key = apply(across(all_of(column_order)), 1, paste0, collapse = ""),
+      Pattern_ID = paste0("P", row_number())
+    ) %>%
+    arrange(Alignment_Rank, desc(Frequency))
+
+  # Matrix of unique patterns.
+  pattern_matrix <- row_patterns %>%
+    select(all_of(column_order)) %>%
+    as.matrix()
+
+  # Transpose so rows are superpopulations and columns are unique patterns.
+  pattern_matrix_t <- t(pattern_matrix)
+
+  # Enforce manuscript row order.
+  desired_order <- c("AFR", "AMR", "EAS", "EUR", "SAS")
+  desired_order <- desired_order[desired_order %in% rownames(pattern_matrix_t)]
+  pattern_matrix_t <- pattern_matrix_t[desired_order, ]
+
+  row_labels <- rownames(pattern_matrix_t)
+
+  # Top annotation showing the number of contigs represented by each pattern.
+  frequency_colors <- colorRamp2(
+    c(min(row_patterns$Frequency), max(row_patterns$Frequency)),
+    c("lightblue", "darkblue")
+  )
+
+  top_anno <- HeatmapAnnotation(
+    Frequency = row_patterns$Frequency,
+    col = list(Frequency = frequency_colors),
+    which = "column",
+    annotation_name_side = "left",
+    annotation_legend_param = list(title = "Contig Count")
+  )
+
+  ht <- Heatmap(
+    pattern_matrix_t,
+    name = "Alignment Status",
+    col = c("0" = "grey", "1" = "black"),
+    heatmap_legend_param = list(
+      title = "Alignment Status",
+      at = c(0, 1),
+      labels = c("Unaligned", "Aligned")
+    ),
+    cluster_rows = FALSE,
+    cluster_columns = TRUE,
+    row_labels = row_labels,
+    show_column_names = FALSE,
+    column_title = "Contig Alignment Pattern",
+    row_title = NULL,
+    top_annotation = top_anno
+  )
+
+  return(list(summary = row_patterns, heatmap = ht))
+}
+```
+
+```{r make-superpopulation-pattern-heatmap}
+result <- plot_binary_patterns_complexheatmap_transposed(upset_df)
+hprc_superpop_sum <- result$summary
+hprc_superpop_ht <- result$heatmap
+```
+
+```{r}
+hprc_superpop_ht
+```
+
+```{r export-superpopulation-pattern-heatmap, eval=FALSE}
+# Export manuscript-ready image.
+jpeg(
+  "../plots/fig_S5A_apg_contigs_hprc_pop_alignment_new_final.jpeg",
+  width = 2700,
+  height = 700,
+  units = "px",
+  res = 180,
+  bg = "white"
+)
+draw(hprc_superpop_ht)
+dev.off()
+```
+
+## 1.8 UpSet plot of contig sharing across superpopulations
+
+```{r superpopulation-upset-plot}
+# APG Manuscript Supplementary Figure 5B
+# UpSet plot depicting the number of intersections of contig alignments across
+# human superpopulations.
+library(ComplexUpset)
+
+# Ensure integer 0/1 values for plotting.
+upset_df[] <- lapply(upset_df, function(x) as.integer(as.numeric(as.character(x))))
+
+# Reverse order so the display is AFR, AMR, EAS, EUR, SAS from top to bottom.
+sets_order <- c("SAS", "EUR", "EAS", "AMR", "AFR")
+
+plain_theme <- theme(
+  panel.background = element_rect(fill = "white", color = NA),
+  plot.background = element_rect(fill = "white", color = NA),
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  text = element_text(size = 12)
+)
+
+upset_plot <- ComplexUpset::upset(
+  upset_df,
+  intersect = sets_order,
+  name = NULL,
+  sort_sets = FALSE,
+  sort_intersections_by = "cardinality",
+  set_sizes = upset_set_size(
+    position = "right",
+    geom = geom_bar(fill = "gray60", width = 0.6)
+  ) +
+    geom_text(
+      aes(label = after_stat(count)),
+      stat = "count",
+      hjust = -0.2,
+      size = 3
+    ) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.3))) +
+    ylab("Number of Contigs"),
+  base_annotations = list(
+    "Number of Contigs" = intersection_size(
+      mapping = aes(fill = "steelblue"),
+      text = list(
+        angle = 45,
+        hjust = -0.3,
+        vjust = 0.2,
+        size = 3
+      )
+    ) +
+      scale_fill_manual(values = c("steelblue" = "steelblue"), guide = "none") +
+      scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+      theme(
+        axis.title.y = element_text(size = 11),
+        axis.text.y = element_text(size = 10),
+        axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank()
+      )
+  ),
+  matrix = intersection_matrix(
+    geom = geom_point(size = 3),
+    segment = geom_segment(linewidth = 1)
+  ),
+  themes = upset_modify_themes(list(
+    "intersections_matrix" = plain_theme + theme(
+      axis.title.x = element_blank(),
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank()
+    ),
+    "overall_sizes" = plain_theme + theme(
+      axis.title.x = element_text(size = 11)
+    ),
+    "Number of Contigs" = plain_theme,
+    default = plain_theme
+  )),
+  width_ratio = 0.3,
+  min_size = 0,
+  wrap = FALSE
+)
+
+upset_plot
+```
+
+# 2. AFR-specific and AFR-AMR shared contigs across individual HPRC assemblies
+
+## 2.1 Load summary and define contig groups of interest
+
+```{r load-hprc-population-summary}
+# Summary table used in the original workflow.
+apg_hprc_pop_summary <- read.table("../results/unaligned_t2t_contig_hprc_pop_summary.txt")
+head(apg_hprc_pop_summary)
+```
+
+```{r define-pattern-membership}
+# Assign each contig to a binary superpopulation pattern.
+contig_patterns <- superpop_hprc %>%
+  group_by(across(-ContigID)) %>%
+  mutate(Pattern_ID = paste0("P", cur_group_id())) %>%
+  ungroup() %>%
+  select(ContigID, Pattern_ID)
+
+table(contig_patterns$Pattern_ID)
+```
+
+```{r define-afr-specific-contigs}
+# P16 corresponds to AFR-specific contigs in this workflow.
+afr_specific_contigs_P16 <- contig_patterns %>%
+  filter(Pattern_ID == "P16") %>%
+  mutate(Group = "AFR-specific") %>%
+  dplyr::select(ContigID, Group) %>%
+  distinct()
+
+nrow(afr_specific_contigs_P16)
+head(afr_specific_contigs_P16)
+```
+
+```{r define-afr-amr-shared-contigs}
+# P24 corresponds to contigs shared between AFR and AMR in this workflow.
+afr_amr_shared_contigs_P24 <- contig_patterns %>%
+  filter(Pattern_ID == "P24") %>%
+  mutate(Group = "AFR-AMR shared") %>%
+  dplyr::select(ContigID, Group) %>%
+  distinct()
+
+nrow(afr_amr_shared_contigs_P24)
+head(afr_amr_shared_contigs_P24)
+```
+
+```{r merge-contig-metadata}
+# Combined contig metadata for the individual-level heatmap.
+contig_metadata_afr_amr <- rbind(afr_specific_contigs_P16, afr_amr_shared_contigs_P24)
+
+nrow(contig_metadata_afr_amr)
+table(contig_metadata_afr_amr$Group)
+head(contig_metadata_afr_amr)
+```
+
+## 2.2 Load sample metadata and individual alignment matrix
+
+```{r load-sample-metadata}
+# Sample metadata for HPRC individuals.
+# Replace with the final curated metadata file if needed.
+metadata <- read_excel(
+  "../data/ST2_hprc_ancestry_annotations.xlsx",
+  sheet = 1
+) %>%
+  dplyr::select(
+    sampleID = Ind_name,
+    superpopulation = Superpopulation_code
+  )
+
+head(metadata)
+table(metadata$superpopulation)
+dim(metadata)
+
+metadata_afr <- metadata %>%
+  group_by(superpopulation) %>%
+  filter(superpopulation == "AFR")
+
+metadata_amr <- metadata %>%
+  group_by(superpopulation) %>%
+  filter(superpopulation == "AMR")
+
+metadata_afr_amr <- rbind(metadata_afr, metadata_amr) %>%
+  rename(
+    SampleID = sampleID,
+    Superpopulation = superpopulation
+  ) %>%
+  as.data.frame()
+
+nrow(metadata_afr_amr)
+```
+
+```{r load-individual-alignment-matrix}
+# Individual HPRC alignment matrix.
+# Replace this file path with the final curated Supplementary Table ST13 if needed.
+hprc_ind_matrix <- read_csv("../results/unaligned_t2t_contig_hprc_ind47.csv") %>%
+  select(ContigID, all_of(metadata_afr_amr$SampleID))
+
+head(hprc_ind_matrix)
+dim(hprc_ind_matrix)
+```
+
+```{r subset-afr-amr-alignment-matrix}
+alignment_df_afr_amr <- hprc_ind_matrix %>%
+  select(ContigID, all_of(metadata_afr_amr$SampleID))
+
+dim(alignment_df_afr_amr)
+dim(contig_metadata_afr_amr)
+dim(metadata_afr_amr)
+```
+
+```{r assign-afr-amr-objects}
+# Assign canonical objects used by the heatmap code below.
+alignment_df <- alignment_df_afr_amr
+contig_metadata <- contig_metadata_afr_amr
+sample_metadata <- metadata_afr_amr
+```
+
+## 2.3 Individual-level heatmap across AFR and AMR assemblies
+
+```{r build-afr-amr-individual-heatmap}
+# APG Manuscript Figure 4C
+# Heatmap showing APG contig alignment across individual linear assemblies from
+# African (AFR) and Admixed American (AMR) HPRC samples.
+
+# Step 1: Prepare the alignment matrix.
+alignment_matrix <- alignment_df %>%
+  tibble::column_to_rownames("ContigID") %>%
+  as.matrix() %>%
+  t()
+
+# Step 2: Reorder sample metadata to match matrix row order exactly.
+sample_metadata <- sample_metadata %>%
+  filter(SampleID %in% rownames(alignment_matrix)) %>%
+  arrange(match(SampleID, rownames(alignment_matrix)))
+
+alignment_matrix <- alignment_matrix[sample_metadata$SampleID, ]
+
+# Step 3: Reorder contigs so AFR-specific contigs appear first, followed by
+# AFR-AMR shared contigs.
+Contig_metadata <- contig_metadata_afr_amr %>%
+  filter(ContigID %in% colnames(alignment_matrix)) %>%
+  arrange(factor(Group, levels = c("AFR-specific", "AFR-AMR shared")))
+
+alignment_matrix <- alignment_matrix[, Contig_metadata$ContigID]
+
+# Step 4: Define color mappings.
+alignment_colors <- c("1" = "black", "0" = "lightgray")
+superpop_colors <- c("AFR" = "forestgreen", "AMR" = "steelblue")
+group_colors <- c("AFR-specific" = "red", "AFR-AMR shared" = "purple")
+
+# Step 5: Row annotation for sample superpopulation.
+row_ha <- rowAnnotation(
+  Superpopulation = sample_metadata$Superpopulation,
+  col = list(Superpopulation = superpop_colors),
+  show_annotation_name = FALSE,
+  annotation_legend_param = list(title_gp = gpar(fontsize = 14))
+)
+
+# Step 6: Top annotation for contig group.
+col_ha <- HeatmapAnnotation(
+  Group = Contig_metadata$Group,
+  col = list(Group = group_colors),
+  show_annotation_name = TRUE,
+  annotation_name_side = "right",
+  annotation_legend_param = list(title_gp = gpar(fontsize = 14))
+)
+
+# Step 7: Build heatmap.
+fig4C <- Heatmap(
+  alignment_matrix,
+  name = "Alignment",
+  col = alignment_colors,
+  show_row_names = TRUE,
+  show_column_names = FALSE,
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+  column_split = factor(
+    Contig_metadata$Group,
+    levels = c("AFR-AMR shared", "AFR-specific")
+  ),
+  column_gap = unit(2, "mm"),
+  row_dend_side = "left",
+  top_annotation = col_ha,
+  left_annotation = row_ha,
+  border = TRUE,
+  heatmap_legend_param = list(
+    title = "Alignment",
+    at = c(1, 0),
+    labels = c("Aligned", "Unaligned"),
+    title_gp = gpar(fontsize = 14),
+    labels_gp = gpar(fontsize = 14),
+    direction = "horizontal"
+  ),
+  row_names_gp = gpar(fontsize = 14),
+  column_title = "APG Contigs",
+  column_title_gp = gpar(fontsize = 14, fontface = "bold"),
+  row_title = "HPRC Individual Linear Assemblies",
+  row_title_gp = gpar(fontsize = 14, fontface = "bold")
+)
+
+#fig4C
+```
+
+```{r export-afr-amr-individual-heatmap, eval=FALSE}
+# Export manuscript-ready image.
+jpeg(
+  "../plots/Fig4C_apg_contigs_hprc_afr_amr_spe_shared_combined.jpeg",
+  width = 1000,
+  height = 1500,
+  res = 150
+)
+draw(
+  fig4C,
+  heatmap_legend_side = "bottom",
+  annotation_legend_side = "bottom",
+  merge_legend = TRUE,
+  newpage = TRUE
+)
+dev.off()
+```

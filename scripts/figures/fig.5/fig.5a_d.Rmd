@@ -1,0 +1,458 @@
+---
+title: "APG Contig Functional Characterization Plots"
+author: "Abdulfatai Tijjani"
+date: "2026-01-24"
+output: html_document
+---
+
+This R Markdown file contains the plotting code used to generate Figures 5a-d in the APG contig manuscript.
+
+```{r setup, message=FALSE, warning=FALSE}
+# Core packages used across the Figure 5 workflow
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(tidyr)
+library(tibble)
+library(scales)
+library(forcats)
+library(cowplot)
+```
+
+# Global paths
+
+```{r paths}
+# Centralize input/output paths so the document is easier to move across systems.
+# Update these paths only if the repository structure changes.
+
+btc_data_dir    <- "../data/btc_functional"
+figure_out_dir  <- file.path(btc_data_dir, "figures")
+
+# Create the figure output directory if it does not already exist.
+dir.create(figure_out_dir, recursive = TRUE, showWarnings = FALSE)
+```
+
+# Figure 5A. Distribution of APG contigs across alignment classes
+
+```{r fig5A-data}
+# Contig counts in the three manuscript alignment classes.
+# These values are hard-coded because they represent final counts used in the figure.
+fig5a_df <- tibble(
+  category = c("T2T + HPRC", "HPRC only", "Below threshold"),
+  count    = c(14796, 5649, 742)
+)
+
+fig5a_colors <- c(
+  "T2T + HPRC"      = "steelblue",
+  "HPRC only"       = "#E6A85C",
+  "Below threshold" = "lightgrey"
+)
+
+fig5a_plot_df <- fig5a_df %>%
+  mutate(
+    category = factor(category, levels = names(fig5a_colors)),
+    prop = count / sum(count),
+    pct  = prop * 100,
+    label = sprintf("%d (%.1f%%)", count, pct)
+  )
+
+fig5a_plot_df
+```
+
+```{r fig5A-plot, fig.width=4.8, fig.height=4.8}
+# Single stacked bar summarizing the fraction of APG contigs in each class.
+fig5A <- ggplot(fig5a_plot_df, aes(x = 1, y = prop, fill = category)) +
+  geom_col(width = 0.55, color = "white", linewidth = 0.5) +
+  geom_text(
+    aes(label = label),
+    position = position_stack(vjust = 0.5),
+    color = "white",
+    fontface = "bold",
+    size = 3.8
+  ) +
+  scale_fill_manual(
+    values = fig5a_colors,
+    drop = FALSE,
+    name = "Reasonably Good \nAlignment"
+  ) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    breaks = c(0, 0.25, 0.5, 0.75, 1),
+    labels = percent_format(accuracy = 1),
+    expand = expansion(mult = c(0, 0.02))
+  ) +
+  scale_x_continuous(
+    limits = c(0.7, 1.4),
+    breaks = 1,
+    labels = NULL,
+    expand = c(0, 0)
+  ) +
+  labs(x = "APG contigs", y = "Fraction of contigs") +
+  theme_classic(base_size = 12) +
+  theme(
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank(),
+    legend.position = c(0.83, 0.25),
+    legend.title = element_text(face = "bold"),
+    legend.background = element_rect(fill = alpha("white", 0.85), color = "grey80"),
+    plot.margin = margin(6, 6, 6, 6)
+  )
+
+fig5A
+```
+
+```{r fig5A-save, eval=FALSE}
+# Optional export used for manuscript figure assembly.
+ggsave(
+  filename = file.path(figure_out_dir, "fig5A_alignment_class_distribution.png"),
+  plot = fig5A,
+  width = 4.8,
+  height = 4.8,
+  dpi = 300
+)
+```
+
+# Figure 5B / 5C
+# Contig evidence classes from predicted genes and CpG islands
+
+## Load contig-level evidence tables
+
+```{r evidence-data}
+# Input tables:
+# - btc_gene_functional_evidence.tsv: gene-level evidence table
+# - phase4_cpg_contig_summary.tsv: contig-level CpG summary
+# - btc_fa2_contig_lengths.tsv: contig lengths
+# - btc_contig_functional_summary.tsv: consolidated contig-level summary
+#
+# Note:
+# The consolidated summary table is used for the final merge because it already
+# contains the key fields needed for Figure 5:
+#   - n_genes
+#   - n_genes_with_any_protein_support
+#   - n_cpg_islands
+#   - cpg_bp_total
+
+gene_evidence_file        <- file.path(btc_data_dir, "btc_gene_functional_evidence.tsv")
+cpg_summary_file          <- file.path(btc_data_dir, "phase4_cpg_contig_summary.tsv")
+contig_length_file        <- file.path(btc_data_dir, "btc_fa2_contig_lengths.tsv")
+functional_summary_file   <- file.path(btc_data_dir, "btc_contig_functional_summary.tsv")
+
+# Check that all required input files are present before proceeding.
+stopifnot(file.exists(gene_evidence_file))
+stopifnot(file.exists(cpg_summary_file))
+stopifnot(file.exists(contig_length_file))
+stopifnot(file.exists(functional_summary_file))
+
+# Optional upstream tables retained here for transparency/documentation.
+# They are not required for the final merge below because the consolidated
+# functional summary already contains the fields used in the figure.
+contig_gene_ev <- read_tsv(gene_evidence_file, show_col_types = FALSE) %>%
+  group_by(contig) %>%
+  summarise(
+    n_genes = n_distinct(gene_id),
+    .groups = "drop"
+  )
+
+cpg <- read_tsv(cpg_summary_file, show_col_types = FALSE)
+
+# Contig lengths are used as the base table so all BTC contigs are retained.
+len <- read_tsv(
+  contig_length_file,
+  col_names = c("contig", "contig_length_bp"),
+  show_col_types = FALSE
+)
+
+# Read the consolidated contig-level functional summary.
+contig_functional_summary <- read_tsv(
+  functional_summary_file,
+  show_col_types = FALSE
+)
+
+# Confirm that the required columns are present in the summary table.
+required_cols <- c(
+  "contig",
+  "n_genes",
+  "n_genes_with_any_protein_support",
+  "n_cpg_islands",
+  "cpg_bp_total"
+)
+
+missing_cols <- setdiff(required_cols, colnames(contig_functional_summary))
+if (length(missing_cols) > 0) {
+  stop(
+    "Missing required columns in btc_contig_functional_summary.tsv: ",
+    paste(missing_cols, collapse = ", ")
+  )
+}
+
+# Merge contig lengths with the consolidated functional summary.
+# Missing values are set to zero so contigs without a given type of evidence
+# are classified consistently in downstream plots.
+final <- len %>%
+  left_join(
+    contig_functional_summary %>%
+      select(
+        contig,
+        n_genes,
+        n_genes_with_any_protein_support,
+        n_cpg_islands,
+        cpg_bp_total
+      ),
+    by = "contig"
+  ) %>%
+  mutate(
+    n_genes = replace_na(n_genes, 0L),
+    n_genes_with_any_protein_support = replace_na(n_genes_with_any_protein_support, 0L),
+    n_cpg_islands = replace_na(n_cpg_islands, 0L),
+    cpg_bp_total = replace_na(cpg_bp_total, 0)
+  ) %>%
+  mutate(
+    evidence_class = case_when(
+      n_genes > 0 & n_genes_with_any_protein_support > 0 & n_cpg_islands > 0 ~ "supported_gene_and_cpg",
+      n_genes > 0 & n_genes_with_any_protein_support > 0 & n_cpg_islands == 0 ~ "supported_gene_only",
+      n_genes > 0 & n_genes_with_any_protein_support == 0 & n_cpg_islands > 0 ~ "unsupported_gene_and_cpg",
+      n_genes > 0 & n_genes_with_any_protein_support == 0 & n_cpg_islands == 0 ~ "unsupported_gene_only",
+      n_genes == 0 & n_cpg_islands > 0 ~ "cpg_only",
+      TRUE ~ "no_evidence"
+    )
+  )
+
+# Quick check of evidence-class counts before collapsing to broader categories.
+table(final$evidence_class)
+```
+
+```{r evidence-summary}
+# Overall totals used for manuscript interpretation and QC.
+totals <- final %>%
+  summarise(
+    n_contigs = n(),
+    total_predicted_genes = sum(n_genes, na.rm = TRUE),
+    total_cpg_islands = sum(n_cpg_islands, na.rm = TRUE),
+    total_cpg_bp = sum(cpg_bp_total, na.rm = TRUE),
+    mean_cpg_length_overall = ifelse(
+      sum(n_cpg_islands, na.rm = TRUE) > 0,
+      sum(cpg_bp_total, na.rm = TRUE) / sum(n_cpg_islands, na.rm = TRUE),
+      NA_real_
+    )
+  )
+
+totals
+```
+
+```{r evidence-4cat-summary}
+# Collapse the six evidence classes into the four manuscript categories:
+#   Both, Gene only, CpG Islands only, Neither
+plot_df <- final %>%
+  mutate(
+    category = case_when(
+      evidence_class %in% c("supported_gene_and_cpg", "unsupported_gene_and_cpg") ~ "Both",
+      evidence_class %in% c("supported_gene_only", "unsupported_gene_only") ~ "Gene only",
+      evidence_class == "cpg_only" ~ "CpG Islands only",
+      evidence_class == "no_evidence" ~ "Neither",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(category)) %>%
+  count(category, name = "n") %>%
+  mutate(
+    pct = n / sum(n),
+    label = paste0(n, " (", percent(pct, accuracy = 0.1), ")"),
+    category = factor(category, levels = c("Both", "Gene only", "CpG Islands only", "Neither"))
+  ) %>%
+  arrange(category) %>%
+  mutate(ypos = cumsum(pct) - 0.5 * pct)
+
+plot_df
+```
+
+## Figure 5C. Donut plot of four evidence classes
+
+```{r fig5C-data}
+# The final manuscript donut plot uses the fixed category counts below.
+# Keeping these values explicit preserves the original figure exactly.
+donut_df <- tribble(
+  ~evidence_4cat,        ~n,
+  "Both",               297,
+  "Gene only",          149,
+  "CpG Islands only",    27,
+  "Neither",            269
+)
+
+donut_colors <- c(
+  "Both"             = "#E7298A",
+  "Gene only"        = "#3182BD",
+  "CpG Islands only" = "#1B9E77",
+  "Neither"          = "#BDBDBD"
+)
+
+plot_df2 <- donut_df %>%
+  mutate(evidence_4cat = factor(evidence_4cat, levels = names(donut_colors))) %>%
+  arrange(evidence_4cat) %>%
+  mutate(
+    pct = n / sum(n),
+    label = paste0(n, "\n", percent(pct, accuracy = 0.1)),
+    y_center = cumsum(n) - n / 2
+  )
+
+# Separate the tiny CpG slice for custom label placement.
+df_main <- plot_df2 %>% filter(evidence_4cat != "CpG Islands only")
+df_cpg  <- plot_df2 %>%
+  filter(evidence_4cat == "CpG Islands only") %>%
+  mutate(
+    x_label = 2.35,
+    x_line_end = 2.15
+  )
+
+plot_df2
+```
+
+```{r fig5C-plot, fig.width=7, fig.height=5}
+fig5C <- ggplot(plot_df2, aes(x = 2, y = n, fill = evidence_4cat)) +
+  geom_col(width = 1, color = "white", linewidth = 0.7) +
+  geom_text(
+    data = df_main,
+    aes(label = label),
+    position = position_stack(vjust = 0.5),
+    color = "white",
+    fontface = "bold",
+    size = 4.5,
+    lineheight = 0.95,
+    show.legend = FALSE
+  ) +
+  geom_text(
+    data = df_cpg,
+    aes(x = 2.10, y = y_center - 170, label = label),
+    inherit.aes = FALSE,
+    hjust = 0,
+    color = "white",
+    fontface = "bold",
+    size = 4.2,
+    lineheight = 0.95
+  ) +
+  coord_polar(theta = "y") +
+  xlim(0.7, 2.6) +
+  scale_fill_manual(values = donut_colors, name = NULL) +
+  theme_void() +
+  theme(
+    legend.position = c(0.35, 0.5),
+    legend.justification = c(0, 0.5),
+    legend.key.size = unit(0.55, "lines"),
+    legend.text = element_text(size = 12)
+  )
+
+fig5C
+```
+
+```{r fig5C-save, eval=FALSE}
+ggsave(
+  filename = file.path(figure_out_dir, "fig5C_donut_labels_legend_mid_final.png"),
+  plot = fig5C,
+  width = 7,
+  height = 5,
+  dpi = 300
+)
+```
+
+# Figure 5D. Protein support classes among predicted genes
+
+```{r fig5D-data}
+# Load the functional gene evidence table and convert support columns to logicals.
+func_gene_file <- file.path(btc_data_dir, "btc_gene_functional_evidence.tsv")
+
+if (!file.exists(func_gene_file)) {
+  stop(paste("Error: File not found at", func_gene_file, ". Please check the path."))
+}
+
+fg <- read_tsv(func_gene_file, show_col_types = FALSE)
+
+fg2 <- fg %>%
+  mutate(
+    pfam_supported   = as.character(pfam_supported),
+    blastp_supported = as.character(blastp_supported),
+    pfam_supported   = pfam_supported %in% c("True", "TRUE", "T", "1", "TRUE ", "true"),
+    blastp_supported = blastp_supported %in% c("True", "TRUE", "T", "1", "TRUE ", "true")
+  ) %>%
+  mutate(
+    protein_class = case_when(
+      pfam_supported & blastp_supported ~ "Pfam + BLASTP",
+      pfam_supported & !blastp_supported ~ "Pfam only",
+      !pfam_supported & blastp_supported ~ "BLASTP only",
+      TRUE ~ "No support"
+    ),
+    protein_class = factor(
+      protein_class,
+      levels = c("Pfam + BLASTP", "Pfam only", "BLASTP only", "No support")
+    )
+  )
+
+gene_protein_frac <- fg2 %>%
+  count(protein_class) %>%
+  mutate(frac = n / sum(n))
+
+gene_protein_frac
+```
+
+```{r fig5D-plot, fig.width=7, fig.height=4.5}
+# Horizontal bar plot of protein support categories.
+fig5D_colors <- c(
+  "Pfam + BLASTP" = "#CD661D",
+  "Pfam only"     = "hotpink",
+  "BLASTP only"   = "#A2CD5A",
+  "No support"    = "#CDAA7D"
+)
+
+fig5D <- ggplot(gene_protein_frac, aes(x = protein_class, y = frac)) +
+  geom_col(aes(fill = protein_class), color = "black", linewidth = 0.3) +
+  coord_flip(clip = "off") +
+  scale_y_continuous(
+    labels = percent_format(accuracy = 1),
+    limits = c(0, 0.4),
+    expand = expansion(mult = c(0, 0.08))
+  ) +
+  scale_fill_manual(values = fig5D_colors, guide = "none") +
+  geom_text(
+    aes(label = n),
+    hjust = -0.1,
+    size = 4,
+    color = "black",
+    family = "Arial"
+  ) +
+  labs(
+    x = NULL,
+    y = "Fraction of Augustus Predicted Genes (%)"
+  ) +
+  theme_cowplot(font_size = 12, font_family = "Arial") +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16, margin = margin(b = 10)),
+    plot.subtitle = element_text(hjust = 0.5, size = 12, margin = margin(b = 15)),
+    plot.caption = element_text(hjust = 1, size = 9, color = "gray50", margin = margin(t = 15)),
+    axis.text.x = element_text(size = 10, color = "black"),
+    axis.text.y = element_text(size = 11, color = "black", face = "bold"),
+    axis.title.x = element_text(size = 12, margin = margin(t = 10)),
+    axis.line.x = element_line(color = "black", linewidth = 0.5),
+    axis.line.y = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_line(color = "gray85", linetype = "dotted"),
+    plot.margin = margin(t = 15, r = 15, b = 15, l = 15),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.7)
+  )
+
+fig5D
+```
+
+```{r fig5D-save, eval=FALSE}
+ggsave(
+  filename = file.path(figure_out_dir, "fig5D_protein_support_revised_color_final.png"),
+  plot = fig5D,
+  width = 7,
+  height = 4.5,
+  dpi = 300
+)
+```
+
+# Session information
+
+```{r session-info}
+sessionInfo()
+```

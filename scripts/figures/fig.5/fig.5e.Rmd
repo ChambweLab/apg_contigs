@@ -1,0 +1,171 @@
+---
+title: "Code to Generate Fig.5e - BTC Gene Expression Across Populations"
+output: html_document
+date: "2025-12-18"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load libraries and data
+Libraries
+```{r}
+library(readr)
+library(dplyr)
+library(data.table)
+library(readxl)
+library(ggplot2)
+library(ComplexHeatmap)
+library(tibble)
+```
+Load file with counts of samples per population group with BTC gene expression - 1000 Genomes cohort
+```{r}
+p1kg <- read.csv("1KGP_PopCounts_per_BTCgene.csv")
+p1kg$cohort <- "1000 Genomes"
+```
+
+Load file with counts of samples per population group with BTC gene expression - TCGA BRCRA cohort
+```{r}
+tcga <- read.csv("TCGA_PopCounts_per_BTCgene.csv")
+tcga$cohort <- "TCGA BRCA"
+```
+
+Identify BTC genes expressed (TPM value > 0) across any of the cohorts
+```{r}
+genes <- rbind(p1kg[,-3], tcga)
+head(genes)
+```
+
+Load functional annotation support for BTC genes
+```{r}
+functional_support <- read_delim("btc_contig_level_functional_summary.tsv", 
+     delim = "\t", escape_double = FALSE, 
+     trim_ws = TRUE)
+
+colnames(functional_support)[1] <- "accession"
+```
+
+Create dataframe with functional annotation support for expressed BTC genes across cohorts and populations
+```{r}
+merged <- merge(genes, functional_support[,-c(4,7,9,10,12)], by="accession")
+merged <- merged[order(merged$AFR, merged$EUR, decreasing = T),]
+
+df <- merged %>%
+  mutate(
+    support = case_when(
+      n_genes_pfam_supported > 0 & n_genes_blastp_supported > 0 ~ "Pfam & BLAST",
+      n_genes_pfam_supported > 0 ~ "Pfam only",
+      n_genes_blastp_supported > 0 ~ "BLAST only",
+      TRUE ~ "No support"
+    )
+  )
+
+df$support <- factor(df$support, levels=c("No support", "BLAST only", "Pfam only", "Pfam & BLAST"))
+head(df)
+```
+
+Reformat dataframe to be used for plotting
+```{r}
+library(tidyr)
+
+df_long <- df %>%
+  pivot_longer(c(AFR, EUR), names_to = "population", values_to = "n_assemblies")
+```
+
+## Generate visualization
+Generate plot for all genes expressed across cohorts
+```{r}
+p1 <- ggplot(df_long, 
+       aes(x = reorder(gene, n_assemblies),
+           y = n_assemblies,
+           fill = population)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  facet_wrap(~cohort) +
+  coord_flip() +
+  theme(
+    text = element_text(size = 15),
+    plot.title = element_text(size = 15, face = "bold"),
+    axis.text.x = element_text(color = "black", hjust = 1,size = 15),
+    axis.text.y = element_text(color = "black",size = 13),
+    panel.background = element_blank(),
+    axis.line = element_line(colour = "black"),
+    axis.ticks = element_line(color = "black"),
+    panel.border = element_rect(colour = "black", fill = NA, size = 1)
+  )  +
+  labs(
+    x = "Predicted Gene",
+    y = "Number of Assemblies with RNA Expression",
+    fill = "Superpop"
+  )+ 
+  scale_fill_manual(values=c("darkorange","royalblue"))
+
+p1
+```
+
+Save plot
+```{r}
+ggsave("all_expressed_btc_genes.jpeg",
+       width = 18, height = 19, device='jpeg', dpi=700,units = c("cm"))
+```
+
+Generate order that the genes appear on the full expressed gene plot (p1)
+```{r}
+built <- ggplot_build(p2)
+gene_order <- built$layout$panel_params[[1]]$y$get_labels()
+```
+
+Create plot for only top 12 genes
+```{r}
+p2 <- ggplot(df_long[which(df_long$gene %in% rev(gene_order)[1:12]),], 
+       aes(x = reorder(gene, n_assemblies),
+           y = n_assemblies,
+           fill = population)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  facet_wrap(~cohort) +
+  coord_flip() +
+  theme(
+    text = element_text(size = 15),
+    plot.title = element_text(size = 15, face = "bold"),
+    axis.text.x = element_text(color = "black", hjust = 1,size = 15),
+    axis.text.y = element_text(color = "black",size = 13),
+    panel.background = element_blank(),
+    axis.line = element_line(colour = "black"),
+    axis.ticks = element_line(color = "black"),
+    panel.border = element_rect(colour = "black", fill = NA, size = 1)
+  )  +
+  labs(
+    x = "Predicted Gene",
+    y = "Number of Assemblies with RNA Expression",
+    fill = "Superpop"
+  )+ 
+  scale_fill_manual(values=c("darkorange","royalblue"))
+
+p2
+```
+Save plot with top BTC 12 genes
+```{r}
+ggsave("top-12_expressed_btc_genes.jpeg",
+       width = 16, height = 12, device='jpeg', dpi=700,units = c("cm"))
+```
+
+Regenerate order of genes as they appear in the top-12-gene plot and save it as .csv file (to be used for the Martini et al. cohort visualization)
+```{r}
+support_gene <- df_long[which(df_long$gene %in% rev(gene_order)[1:12]),] %>%
+  select(gene, support) %>%
+  distinct()
+
+support_vec <- factor(
+  support_gene$support,
+  levels = c("No support", "BLAST only", "Pfam only", "Pfam & BLAST")
+)
+
+names(support_vec) <- support_gene$gene
+
+support_vec <- support_vec[rev(gene_order)[1:12]]
+
+write.csv(names(support_vec), "gene_order_functional_plot.csv",
+          row.names = F)
+```
+
+*Same code to be used to generate the Martini et al. cohort related panel fig.5e, but this time using ethnicity instead of superpopulation annotations per sample.*

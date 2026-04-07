@@ -1,0 +1,95 @@
+#!/usr/bin/env Rscript
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(forcats)
+  library(ggplot2)
+  library(readr)
+})
+
+# ------------------------------------------------------------------
+# Paths
+# ------------------------------------------------------------------
+
+input_enrichment_csv <- "results/apg_contig_t2t_np_geneslist_OVA.csv"
+output_plot <- "figures/Figure3B_go_enrichment_t2t_mapped_genes.jpeg"
+
+# ------------------------------------------------------------------
+# Helper function
+# ------------------------------------------------------------------
+
+insert_line_break <- function(text, width = 30) {
+  vapply(
+    text,
+    function(x) paste(strwrap(x, width = width), collapse = "\n"),
+    character(1)
+  )
+}
+
+# ------------------------------------------------------------------
+# Load enrichment results
+# ------------------------------------------------------------------
+
+go_results <- read_csv(input_enrichment_csv, show_col_types = FALSE)
+
+# ------------------------------------------------------------------
+# Prepare data for plotting
+# ------------------------------------------------------------------
+
+n_terms_per_ontology <- 10
+fdr_cutoff <- 0.05
+score_cutoff <- -log10(fdr_cutoff)
+
+plot_df <- go_results %>%
+  filter(ONTOLOGY %in% c("BP", "CC", "MF")) %>%
+  mutate(
+    ontology = ONTOLOGY,
+    FDR = as.numeric(p.adjust),
+    score = -log10(FDR),
+    term = insert_line_break(Description, width = 30)
+  ) %>%
+  filter(!is.na(FDR), !is.na(FoldEnrichment)) %>%
+  group_by(ontology) %>%
+  slice_min(order_by = FDR, n = n_terms_per_ontology, with_ties = FALSE) %>%
+  ungroup() %>%
+  group_by(ontology) %>%
+  mutate(term = fct_reorder(term, score)) %>%
+  ungroup()
+
+# ------------------------------------------------------------------
+# Plot
+# ------------------------------------------------------------------
+
+p_figure3b <- ggplot(plot_df, aes(x = term, y = score, fill = FoldEnrichment)) +
+  geom_col(width = 0.8) +
+  geom_hline(yintercept = score_cutoff, linetype = "dashed", color = "firebrick") +
+  facet_grid(. ~ ontology, scales = "free_x", space = "free_x") +
+  scale_fill_gradient(low = "lightblue", high = "darkblue") +
+  labs(
+    x = NULL,
+    y = expression(-log[10](FDR)),
+    fill = "Fold enrichment"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.background = element_rect(fill = "grey90", color = "grey30"),
+    strip.text = element_text(face = "bold", size = 13),
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, face = "bold", size = 11),
+    axis.text.y = element_text(face = "bold", size = 11),
+    axis.title.y = element_text(face = "bold", size = 13),
+    legend.title = element_text(face = "bold", size = 12),
+    legend.text = element_text(face = "bold", size = 11),
+    panel.border = element_rect(color = "grey30", fill = NA, linewidth = 0.8)
+  )
+
+print(p_figure3b)
+
+ggsave(
+  filename = output_plot,
+  plot = p_figure3b,
+  width = 10,
+  height = 5,
+  dpi = 300
+)

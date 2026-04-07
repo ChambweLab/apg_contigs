@@ -1,0 +1,249 @@
+---
+title: "Violin plots for contigs with differential coverage"
+author: "Kyriaki Founta"
+date: "2026-03-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load libraries & data
+Libraries
+```{r}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggpubr)
+```
+
+Percent contig length coverage .csv file for all three cohorts was generated using the "HPRCcontigs_calculate_pct_contig_coverage.ipynb" script. Additionally, for every cohort, we added "superpop" (population or ethnicity group) annotation per sample as a new column in the .csv file, using the available metadata. 
+
+1kgp percent contig length coverage
+```{r}
+dat1 <- read_csv("hprc_contig_pct_coverage_1kgp-superpop.csv")
+
+dat1$Cohort <- "1000 Genomes"
+
+head(dat1)
+```
+
+TCGA percent contig length coverage
+```{r}
+dat2 <- read_csv("hprc_contig_pct_coverage_tcga-superpop.csv")
+
+dat2$Cohort <- "TCGA BRCA"
+
+head(dat2)
+```
+
+Martini et al. percent contig length coverage
+```{r}
+dat3 <- read_csv("hprc_contig_pct_coverage_martini-superpop.csv")
+
+dat3$Cohort <- "Martini et al."
+colnames(dat3)[4] <- "superpop"
+
+head(dat3)
+```
+
+Select contigs of interest (differentially RNAseq covered apg-contigs between AFR & EUR samples)
+```{r}
+contigs <- c("PDBU01048398.1", "PDBU01024832.1", "PDBU01001207.1", "PDBU01014857.1", "PDBU01050395.1", "PDBU01096400.1", "PDBU01000224.1", "PDBU01000303.1", "PDBU01001035.1")
+```
+
+Combine all cohort data
+```{r}
+all <- rbind(dat1[which(dat1$contig %in% contigs),], dat2[which(dat2$contig %in% contigs),], dat3[which(dat3$contig %in% contigs),])
+head(all)
+```
+
+```{r}
+all[which(all$superpop == "White"),"superpop"] <- "European American"
+```
+
+
+## Visualization 
+Generate plot list for all contigs
+```{r}
+library(tidyverse)          
+library(ggbeeswarm)        
+library(patchwork)  
+library(ggsignif)
+
+# Define colors once      
+my_colors <- c(      
+  "AFR" = "darkorange",       
+  "EUR" = "royalblue",      
+  "African American" = "#8968CD",      
+  "Ethiopian" = "#CD9B9B",      
+  "Ghanaian" = "#6B8E23",      
+  "European American" = "gray50"      
+)
+
+# Define which strand(s) to use for each contig    
+strand_map <- list(      
+  "PDBU01096400.1" = "str2",      
+  "PDBU01000224.1" = "str2",      
+  "PDBU01001035.1" = "str2",      
+  "PDBU01000303.1" = "str2",      
+  "PDBU01024832.1" = c("str1", "str2"),    
+  "PDBU01014857.1" = "str2",      
+  "PDBU01001207.1" = "str2",      
+  "PDBU01048398.1" = "str1",      
+  "PDBU01050395.1" = "str2"    
+)
+
+# ============================================================    
+# PRE-COMPUTED SIGNIFICANCE RESULTS    
+# Only include significant results (no "ns" rows needed)  
+# group1 and group2 = the two superpops being compared  
+# ============================================================    
+sig_df <- tribble(    
+  ~contig,             ~strand, ~Cohort,          ~group1, ~group2, ~label,  
+  "PDBU01096400.1",    "str2",  "TCGA BRCA",      "AFR",   "EUR",  "*",  
+  "PDBU01000224.1",    "str2",  "TCGA BRCA",      "AFR",   "EUR",  "*",  
+  "PDBU01001035.1",    "str2",  "TCGA BRCA",      "AFR",   "EUR",  "*",  
+  "PDBU01000303.1",    "str2",  "TCGA BRCA",      "AFR",   "EUR",  "*",  
+  "PDBU01024832.1",    "str1",  "1000 Genomes",   "AFR",   "EUR",  "*",  
+  "PDBU01024832.1",    "str2",  "1000 Genomes",   "AFR",   "EUR",  "*",  
+  "PDBU01014857.1",    "str2",  "TCGA BRCA",      "AFR",   "EUR",  "*",  
+  "PDBU01001207.1",    "str2",  "1000 Genomes",   "AFR",   "EUR",  "*",  
+  "PDBU01048398.1",    "str1",  "1000 Genomes",   "AFR",   "EUR",  "*",  
+  "PDBU01050395.1",    "str2",  "TCGA BRCA",      "AFR",   "EUR",  "*"  
+)
+
+# Get unique contigs          
+contigs <- unique(all$contig)        
+cohorts <- unique(all$Cohort)
+
+# Initialize empty list to store plots          
+plot_list <- list()    
+plot_index <- 1
+
+for (i in seq_along(contigs)) {          
+            
+  contig_name <- contigs[i]          
+      
+  strands <- strand_map[[contig_name]]    
+  if (is.null(strands)) strands <- "str1"    
+      
+  for (strand in strands) {    
+        
+    coverage_col <- paste0("pct_covered_T100_", strand)      
+    strand_label <- ifelse(strand == "str1", "Strand 1", "Strand 2")    
+        
+    df_contig <- all %>%          
+      dplyr::filter(contig == contig_name) %>%      
+      mutate(coverage_value = .data[[coverage_col]])    
+            
+    cohort_plots <- list()        
+            
+    for (j in seq_along(cohorts)) {        
+              
+      cohort_name <- cohorts[j]        
+              
+      df_subset <- df_contig %>%          
+        dplyr::filter(Cohort == cohort_name) %>%          
+        mutate(superpop = factor(superpop,   
+                                 levels = c("AFR", "EUR",   
+                                            "African American", "Ethiopian",   
+                                            "Ghanaian", "European American")))      
+              
+      if (nrow(df_subset) == 0) next    
+        
+      # Look up if there's a significant result for this contig + strand + cohort  
+      sig_subset <- sig_df %>%  
+        dplyr::filter(contig == contig_name, strand == !!strand, Cohort == cohort_name)  
+          
+      p_cohort <- ggplot(df_subset, aes(x = superpop, y = coverage_value, fill = superpop)) +          
+        geom_violin(alpha = 0.5, outlier.shape = NA) +  
+        stat_summary(fun = mean, geom = "crossbar",  width = 0.15,  
+                     fatten = 1.5, color = "black", linewidth = 0.6,   
+                     fill = "black", color = "black") +  
+        #geom_boxplot(alpha = 0.5, outlier.shape = NA) +          
+        geom_beeswarm(aes(color = superpop), size = 1.5, alpha = 0.7, cex = 2) +          
+        scale_fill_manual(values = my_colors) +      
+        scale_color_manual(values = my_colors) +      
+        scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.15))) +    
+        labs(          
+          title = cohort_name,        
+          x = NULL,          
+          y = NULL        
+        ) +          
+        theme(          
+          text = element_text(size = 12),
+          plot.title = element_text(hjust = 0.5, face = "bold", size = 12),          
+          axis.text.x = element_text(angle = 45, hjust = 1, color = "black"),  
+          axis.text.y = element_text(color = "black"),  
+          legend.position = "none",  
+          panel.background = element_blank(),    
+          axis.line = element_line(colour = "black"),    
+          panel.border = element_rect(colour = "black", fill = NA, size = 1)  
+        )  
+        
+      # Add significance bracket only if significant  
+      if (nrow(sig_subset) > 0) {  
+        y_max <- max(df_subset$coverage_value, na.rm = TRUE)  
+          
+        for (k in 1:nrow(sig_subset)) {  
+          p_cohort <- p_cohort +  
+            geom_signif(  
+              comparisons = list(c(sig_subset$group1[k], sig_subset$group2[k])),  
+              annotations = sig_subset$label[k],  
+              y_position = y_max * 1.05 + (y_max * 0.1 * (k - 1)),  
+              tip_length = 0.02,  
+              textsize = 5,  
+              color = "black"  
+            )  
+        }  
+          
+        # Extend y-axis to fit brackets  
+        p_cohort <- p_cohort +  
+          scale_y_continuous(  
+            limits = c(0, y_max * 1.25),  
+            expand = expansion(mult = c(0, 0.05))  
+          )  
+      }  
+            
+      cohort_plots[[j]] <- p_cohort        
+    }        
+            
+    cohort_plots <- compact(cohort_plots)        
+            
+    combined <- wrap_plots(cohort_plots, nrow = 1) +        
+      plot_annotation(        
+        title = paste("Coverage at 100x -", contig_name, paste0("(", strand_label, ")")),        
+        subtitle = paste("Contig length:", unique(df_contig$length), "bp"),        
+        theme = theme(        
+          plot.title = element_text(hjust = 0.5, face = "bold", size = 14),        
+          plot.subtitle = element_text(hjust = 0.5, size = 10)        
+        )        
+      )        
+            
+    combined <- combined &        
+      ylab("% Coverage at 100x") &        
+      xlab("")    
+        
+    plot_list[[plot_index]] <- combined    
+    plot_index <- plot_index + 1    
+  }    
+}
+
+plot_list  
+```
+
+Save plots
+```{r}
+# Save all plots into a single PDF  
+pdf("violin_beeswarm_boxplots_100x_AllCohorts_sig_contigs.pdf", width = 10, height = 5)  
+for (p in plot_list) {  
+  print(p)  
+}  
+dev.off()
+
+plot_list  
+```
+

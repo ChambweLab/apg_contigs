@@ -1,0 +1,55 @@
+---
+title: "Process BTC RSEM matrix"
+output: html_document
+date: "2025-12-16"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load libraries and data
+Libraries
+```{r}
+library(readr)
+library(dplyr)
+```
+Data
+```{r}
+dat <- read_delim("rsem.merged.gene_tpm.tsv", 
+     delim = "\t", escape_double = FALSE, 
+     trim_ws = TRUE)
+head(dat)
+```
+Processing
+```{r}
+dat <- as.data.frame(dat)
+
+row.names(dat) <- dat$gene_id
+dat <- dat[,-c(1:2)]
+
+head(dat)
+```
+Remove genes with all zeros across samples
+```{r}
+dat2 <- dat[apply(dat, 1, function(x) !all(x==0)),]
+head(dat2)
+```
+Keep only samples that express at least one gene
+```{r}
+# Identify columns where all values are zero
+cols_to_remove <- apply(dat2 == 0, 2, all)
+
+# Subset the data frame to keep only columns that are NOT all zeros
+dat3 <- dat2[, !cols_to_remove]
+dim(dat3)
+```
+Print first rows of file
+```{r}
+head(dat3)
+```
+Save data
+```{r}
+write.csv(dat3,"processed_btc_tpm.csv", row.names = T)
+```
+

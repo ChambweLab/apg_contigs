@@ -1,0 +1,148 @@
+---
+title: "Differential HPRC-Contig RNAseq Coverage Analysis"
+author: "Kyriaki Founta"
+date: "2026-02-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load libraries and data
+Libraries
+```{r}
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(data.table)
+```
+Load results for cohort of interest
+```{r}
+dat1 <- read_csv("hprc_contig_pct_coverage-superpop-info.csv") # file with percent contig length coverage per sample for different Ts, as well as population class info per sample as a separate column
+head(dat1)
+```
+
+## Set up differential coverage function
+Function analyzing both strands simultaneously 
+```{r}
+library(tidyverse)  
+library(matrixTests)
+
+run_differential_both_strands <- function(df, threshold = "T1") {  
+    
+  col_str1 <- paste0("pct_covered_", threshold, "_str1")  
+  col_str2 <- paste0("pct_covered_", threshold, "_str2")  
+    
+  if (!col_str1 %in% colnames(df)) stop(paste(col_str1, "not found"))  
+  if (!col_str2 %in% colnames(df)) stop(paste(col_str2, "not found"))  
+    
+  meta <- df %>% dplyr::select(sample, superpop) %>% distinct()  
+  afr_samples <- meta$sample[meta$superpop == "AFR"]  
+  eur_samples <- meta$sample[meta$superpop == "EUR"]  
+    
+  results_list <- list()  
+  processing_list <- list()  # <-- NEW: store processing stats  
+    
+  for (strand in c("str1", "str2")) {  
+      
+    col_name <- paste0("pct_covered_", threshold, "_", strand)  
+    strand_label <- ifelse(strand == "str1", "Strand 1 (Forward)", "Strand 2 (Reverse)")  
+      
+    cat("\n--- Processing", strand_label, "at", threshold, "---\n")  
+      
+    coverage_mat <- df %>%  
+      dplyr::select(contig, sample, all_of(col_name)) %>%  
+      pivot_wider(names_from = sample, values_from = all_of(col_name), values_fill = 0) %>%  
+      column_to_rownames("contig") %>%  
+      as.matrix()  
+      
+    afr_mat <- coverage_mat[, afr_samples, drop = FALSE]  
+    eur_mat <- coverage_mat[, eur_samples, drop = FALSE]  
+      
+    row_has_signal <- (rowSums(afr_mat != 0, na.rm = TRUE) > 0) |  
+                      (rowSums(eur_mat != 0, na.rm = TRUE) > 0)  
+      
+    # --- Save processing stats ---  
+    processing_list[[strand]] <- data.frame(  
+      threshold       = threshold,  
+      strand          = strand_label,  
+      contigs_total   = nrow(coverage_mat),  
+      contigs_signal  = sum(row_has_signal),  
+      contigs_removed = sum(!row_has_signal)  
+    )  
+      
+    cat("Contigs total:       ", nrow(coverage_mat), "\n")  
+    cat("Contigs with signal: ", sum(row_has_signal), "\n")  
+    cat("Contigs removed:     ", sum(!row_has_signal), "\n")  
+      
+    afr_mat <- afr_mat[row_has_signal, , drop = FALSE]  
+    eur_mat <- eur_mat[row_has_signal, , drop = FALSE]  
+      
+    wt <- row_wilcoxon_twosample(afr_mat, eur_mat, exact = FALSE)  
+      
+    pseudo <- 0.0001  
+    mean_afr <- rowMeans(afr_mat, na.rm = TRUE)  
+    mean_eur <- rowMeans(eur_mat, na.rm = TRUE)  
+      
+    res <- data.frame(  
+      contig       = rownames(afr_mat),  
+      mean_AFR     = mean_afr,  
+      mean_EUR     = mean_eur,  
+      log2FC       = log2((mean_afr + pseudo) / (mean_eur + pseudo)),  
+      diff_AFR_EUR = mean_afr - mean_eur,  
+      pvalue       = wt$pvalue,  
+      padj         = p.adjust(wt$pvalue, method = "BH"),  
+      strand       = strand_label,  
+      stringsAsFactors = FALSE  
+    )  
+      
+    res$color_group <- case_when(  
+      res$padj < 0.05 & res$diff_AFR_EUR > 0  ~ "Enriched in AFR",  
+      res$padj < 0.05 & res$diff_AFR_EUR < 0  ~ "Enriched in EUR",  
+      TRUE ~ "NS"  
+    )  
+      
+    results_list[[strand]] <- res  
+  }  
+    
+  combined <- bind_rows(results_list)  
+  processing_summary <- bind_rows(processing_list)  
+    
+  # Enrichment summary  
+  enrichment_summary <- combined %>%  
+    group_by(strand, color_group) %>%  
+    summarise(n = n(), .groups = "drop") %>%  
+    pivot_wider(names_from = color_group, values_from = n, values_fill = 0) %>%  
+    mutate(threshold = threshold)  
+    
+  cat("\n--- Processing Summary ---\n")  
+  print(processing_summary)  
+  cat("\n--- Enrichment Summary ---\n")  
+  print(enrichment_summary)  
+    
+  return(list(  
+    results             = combined,  
+    processing_summary  = processing_summary,  
+    enrichment_summary  = enrichment_summary  
+  ))  
+}  
+
+```
+
+## Run differential coverage analysis
+Combined strand analysis for T100
+```{r}
+library(tidyverse)
+
+out <- run_differential_both_strands(dat1, threshold = "T100")
+res_both <- out$results
+
+res_both[which(res_both$padj < 0.05),]
+```
+
+Save significant results
+```{r}
+write.csv(res_both[which(res_both$padj < 0.05),], "sig_diff_contigs_t100.csv",
+          row.names=FALSE)
+```
